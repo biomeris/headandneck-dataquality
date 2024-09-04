@@ -1,0 +1,362 @@
+##### Data Quality HN Core Data Registry 2.0 #####
+
+# check ID algorithm
+ID_alg <- "DQ_2_TEST1"
+
+# Read list of script previously run
+file_scripts <- "/opt/redcap_dq/environment/logs/history.txt"
+list_of_scripts <- readtext::readtext(file_scripts)
+
+if (length(grep(ID_alg, list_of_scripts$text)) != 0) {
+  message("You have already run this script")
+  opt <- options(show.error.messages=FALSE)
+  on.exit(options(opt))
+  stop()
+}
+
+##### If not stopped run the code 
+# Add this script to the list of scripts previously run 
+sink(file_scripts, append = TRUE)
+cat(ID_alg, file = file_scripts, sep = "\n", append = TRUE)
+sink()
+
+# load R packages
+library(REDCapR)
+library(plyr)
+library(dplyr)
+library(openxlsx)
+
+#### FUNCTIONS ####
+
+## function that produces the df to write in the individual output file 
+summary.rules <- function(data, method = 'count', decreasing = TRUE){
+  ## METHOD:
+  #  'count' : conteggio dei check FAIL per ogni regola 
+  #  'patients' : lista di ogni regola (per cui c'è almeno un FAIL) e pazienti su ogni colonna (con una X se per quel paziente il check è FAIL) 
+  
+  ## DECREASING:
+  #  se TRUE, ordina le regole in ordine decrescente (da quella con più FAIL a quella con meno FAIL)
+  
+  check_rules <- plyr::count(data, c("category","description"))
+  
+  if(decreasing)
+    check_rules <- check_rules %>% arrange(desc(freq))
+  
+  if(method == 'count'){
+    check_rules <- check_rules %>%
+      mutate(perc = formattable::percent(freq/nrow(data))) %>% # aggiungo percentuale sul totale degli errori
+      bind_rows(dplyr::summarise(.,
+                                 across(where(is.numeric), sum),
+                                 across(where(is.character), ~"Total")))
+  } else if (method == 'patients'){
+    patients <- unique(data[,1]) # lista dei pazienti
+    for(i in 1:length(patients)){
+      checks <- c() # vettore dei check per ogni paziente
+      for (j in 1:nrow(check_rules)) {
+        # controllo se c'è la coppia paziente-check nel dataframe con i check FAIL: se c'è (paziente non supera il check) metto 1, altrimenti 0 (il paziente ha superato il check)
+        checks[j] <- ifelse(!(is.na(prodlim::row.match(c(patients[i],check_rules[j,2]), data[,c(1,3)]))), 1, 0)
+      }
+      check_rules[as.character(patients[i])] <- matrix(checks) #aggiungo al df colonna con check per ogni paziente 
+    }
+    # totali di colonna (totale per ogni paziente + totale check)
+    check_rules <- check_rules %>%
+      bind_rows(dplyr::summarise(.,
+                                 across(where(is.numeric), sum),
+                                 across(where(is.character), ~"Total")))
+    # ordino pazienti in ordine decrescente di numero di errori e metto colonna freq in ultima posizione
+    check_rules <- check_rules[,order(check_rules[nrow(check_rules),], decreasing = T)] %>% select(-freq, everything())
+    # sostituisco 0 con NA
+    check_rules[check_rules == 0] <- NA 
+    # sostituisco 1 con X
+    check_rules[1:nrow(check_rules)-1, 3:ncol(check_rules)-1] <- replace(check_rules[1:nrow(check_rules)-1, 3:ncol(check_rules)-1],check_rules[1:nrow(check_rules)-1, 3:ncol(check_rules)-1] == 1, "X") 
+  } else {
+    stop("Please enter a valid method for this function")
+  }
+  return(check_rules)
+}
+
+## function to write the legend for each check 
+getLegend <- function(data){
+  legend <- data.frame()
+  checks <- unique(data[c("description")])
+  for (i in 1:nrow(checks)) {
+    legend_check <- data[which(data$description == checks$description[i]),][1,-1] %>% select(grep("instance",colnames(.), invert = TRUE))
+    legend <- rbind.fill(legend, legend_check)
+  }
+  return(legend)
+}
+
+## Translate branching logic to logical expression
+renderLogic <- function(br_logic_str){
+  expr_str <- br_logic_str %>% gsub('OR', '|', .) %>%
+    gsub('AND', '&', .) %>%
+    gsub('=', '==', .) %>%
+    gsub('\\[', '', .) %>%
+    gsub('\\]', '', .) %>%
+    gsub('<>', '!=', .) %>%
+    gsub("(\\()([[:digit:]])(\\))", "___\\2",.)
+  return(expr_str)
+}
+
+## calculate percentage missing and missing + unknown
+getMissUnk <- function(ps, var, check_summary){
+  check_summary <- rbind.fill(check_summary, data.frame("var" = var, "den" = nrow(ps),
+                                                        "perc_miss" = nrow(filter(ps, is.na(get(var))))/nrow(ps),
+                                                        "perc_miss_unk" = nrow(subset(ps, is.na(get(var)) | 
+                                                                                        as.numeric(get(var)) == 999 | as.numeric(get(var)) == 9999))/nrow(ps)))
+  return(check_summary)
+}
+
+## calculate percentage missing and missing + unknown checkbox
+getMissUnkCheckbox <- function(ps_tmp, var_patt, check_summary){
+  ps_tmp <- ps_tmp[, grep(pattern = var_patt, colnames(ps_tmp))] %>% cbind(., "sum" = rowSums(.))
+  ind_unk <- grep(pattern = "999", colnames(ps_tmp))
+  check_summary <- rbind.fill(check_summary, data.frame("var" = var_patt, "den" = nrow(ps_tmp),
+                                                        "perc_miss" = nrow(filter(ps_tmp, sum == 0))/nrow(ps_tmp),
+                                                        "perc_miss_unk" = ifelse(length(ind_unk) == 0,
+                                                                                 nrow(filter(ps_tmp, sum == 0))/nrow(ps_tmp),
+                                                                                 (nrow(filter(ps_tmp, sum == 0)) + sum(ps_tmp[,ind_unk]))/nrow(ps_tmp))))
+  return(check_summary)
+}
+
+
+#### MAIN ####
+
+# read properties file
+setwd('/opt/redcap_dq/environment/scripts')
+file_prop <- "../config/config.properties"
+properties <- properties::read.properties(file_prop)
+
+# analysis id
+id_analysis <- "210914_TEST2"
+
+# read PS-CTRL file
+file_name <- list.files(path = '../data', pattern = paste0(id_analysis, "-pset-ctrl"))
+ps_ctrl <- read.csv(paste0('../data/', file_name))
+
+# extract data from REDCap
+data_now <- redcap_read_oneshot(
+  redcap_uri = properties$uri,
+  token = properties$token)$data
+
+# estract metadata from REDCap
+metadata <- redcap_metadata_read(
+  redcap_uri = properties$uri,
+  token = properties$token)$data
+
+############################################## SELECT PS-CTRL ############################################## 
+## New dataframe with new data (hopefully corrected) but old completeness status (from ps_ctrl)
+# Exclude new repeatable events for old patients and all events for new patients
+data <- data_now[prodlim::row.match(replace(ps_ctrl[,1:4],is.na(ps_ctrl[,1:4]), ""),replace(data_now[,1:4],is.na(data_now[,1:4]), "")),]
+# Replace new completeness status with old completeness status
+data[,c("preliminary_complete", "demographic_life_style_complete","previous_cancer_gensyndrome_complete", "cancer_under_study_complete",
+        "staging_procedures_and_stage_complete", "cancer_under_study_treatment_complete","progression_relapse_complete", "status_of_patient_at_fup_complete", 
+        "adverse_events_complete", "imaging_available_complete","tumor_specimen_available_complete")] <- ps_ctrl[,c("preliminary_complete", "demographic_life_style_complete","previous_cancer_gensyndrome_complete", "cancer_under_study_complete",
+                                                                                                                    "staging_procedures_and_stage_complete", "cancer_under_study_treatment_complete","progression_relapse_complete", "status_of_patient_at_fup_complete", 
+                                                                                                                    "adverse_events_complete", "imaging_available_complete","tumor_specimen_available_complete")]
+
+############################################## QC REPORT INDIVIDUAL ##############################################
+### Rule #1 -------------------------------------------
+# Nello strumento  previous cancer genetic syndrome se c05_hnradioyear compilato  allora deve essere >= a  c03_prevcyear
+
+data_rule1 <- ddply(subset(data, previous_cancer_gensyndrome_complete == 2 & !(is.na(c05_hnradioyear))), c("a01_id"), summarize,
+                    category = "ERROR",
+                    description = "Radiotherapy year is prior to previous cancer diagnosis",
+                    form1 = "Previous cancer gen.syndrome",
+                    event1 = "Base",
+                    instance1 = redcap_repeat_instance,
+                    var1 = metadata$field_label[which(metadata$field_name == "c05_hnradioyear")],
+                    value1 = c05_hnradioyear,
+                    form2 = "Previous cancer gen.syndrome",
+                    event2 = "Base",
+                    instance2 = redcap_repeat_instance,
+                    var2 = metadata$field_label[which(metadata$field_name == "c03_prevcyear")],
+                    value2 = c03_prevcyear,
+                    status = ifelse(value1 >= value2,'PASS','FAIL'))
+
+### Rule #2 -------------------------------------------
+# Nello strumento  previous cancer genetic syndrome se c17_gen=yes allora c18_gentype deve essere compilato
+
+data_rule2 <- ddply(subset(data, previous_cancer_gensyndrome_complete == 2 & c17_gen == 1), c("a01_id"), summarize,
+                    category = "MISSING",
+                    description = "Genetic syndrome is not specified",
+                    form1 = "Previous cancer gen.syndrome",
+                    event1 = "Base",
+                    instance1 = redcap_repeat_instance,
+                    var1 = metadata$field_label[which(metadata$field_name == "c18_gentype")],
+                    value1 = c18_gentype,
+                    form2 = "Previous cancer gen.syndrome",
+                    event2 = "Base",
+                    instance2 = redcap_repeat_instance,
+                    var2 = metadata$field_label[which(metadata$field_name == "c17_gen")],
+                    value2 = c17_gen,
+                    status = ifelse(!is.na(value1),'PASS','FAIL'))
+
+### Rule #3 -------------------------------------------
+# Nello strumento demographic and life style b01_birdate deve essere precedente(<) a a05_date
+
+data_rule3 <- ddply(subset(data, demographic_life_style_complete == 2 & preliminary_complete == 2 &
+                             !is.na(b01_birdate) & !is.na(a05_date)), c("a01_id"), summarize,
+                    category = "ERROR",
+                    description = "Date of birth is not prior to first contact with the hospital",
+                    form1 = "Demographic & life style",
+                    event1 = "Base",
+                    instance1 = redcap_repeat_instance,
+                    var1 = metadata$field_label[which(metadata$field_name == "b01_birdate")],
+                    value1 = b01_birdate,
+                    form2 = "Preliminary",
+                    event2 = "Base",
+                    instance2 = redcap_repeat_instance,
+                    var2 = metadata$field_label[which(metadata$field_name == "a05_date")],
+                    value2 = a05_date,
+                    status = ifelse(value1 < value2,'PASS','FAIL'))
+
+### Rule #4 -------------------------------------------
+# Nello strumento demographic and life style variabile b13_alc non è compilata
+
+data_rule4 <- ddply(subset(data, demographic_life_style_complete == 2), c("a01_id"), summarize,
+                    category = "MISSING",
+                    description = "Alcohol is not specified",
+                    form1 = "Demographic & life style",
+                    event1 = "Base",
+                    instance1 = redcap_repeat_instance,
+                    var1 = metadata$field_label[which(metadata$field_name == "b13_alc")],
+                    value1 = b13_alc,
+                    status = ifelse(!(is.na(value1)),'PASS','FAIL'))
+
+# --------------------------------------------------------
+# join data and select only failed check 
+check_failed <- rbind.fill(data_rule1, data_rule2, data_rule3, data_rule4) %>% subset(status == "FAIL") %>% select(-c("value1","value2","status"))
+
+# create workbook
+wb <- createWorkbook()
+
+# add worksheet
+addWorksheet(wb, "Checks")
+addWorksheet(wb, "Legend")
+
+if(!(empty(check_failed))){
+  err_regole <- summary.rules(check_failed, method = "patients")
+  
+  data.table::setnames(err_regole, old = c("category","description", "freq"), new = c("Rule category", "Rule description", "Total"))
+  
+  # get checks legend
+  legend <- getLegend(check_failed) %>% select(c("category","description","var1","event1","form1","var2","event2","form2"))
+  colnames(legend) <- c("Rule category", "Rule description","Variable 1", "Event 1", "Instrument 1", "Variable 2", "Event 2", "Instrument 2")
+  
+  # write data on worksheet
+  writeData(wb,sheet = "Checks", err_regole, borders = "all", borderColour = "#999999",
+            headerStyle = createStyle(border = c("top", "bottom", "left", "right"), borderColour = "#999999", textDecoration = "bold"))                             
+  setColWidths(wb,sheet = "Checks",cols = 1:ncol(err_regole),widths = "auto")
+  
+  writeData(wb,sheet = "Legend", legend, borders = "all", borderColour = "#999999",
+            headerStyle = createStyle(border = c("top", "bottom", "left", "right"), borderColour = "#999999", textDecoration = "bold"))                             
+  setColWidths(wb,sheet = "Legend",cols = 1:ncol(legend),widths = "auto")
+} else {
+  writeData(wb,sheet = "Checks", "No errors found") 
+}
+
+
+# write indivdual report
+file_name <- paste0(properties$id_centro,'-',id_analysis,'-QC-individual-', format(Sys.Date(), "%y%m%d"), '.xlsx')
+
+# save to xlsx
+saveWorkbook(wb, file_name, overwrite = TRUE)
+
+# Copy in /data
+file.copy(from = paste0("/opt/redcap_dq/environment/scripts/", file_name), "/opt/redcap_dq/environment/data")
+
+# Create folder if doesn't exist and copy report
+if (!(dir.exists("/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data")))
+  dir.create("/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data", recursive = TRUE)
+
+file.copy(from = paste0("/opt/redcap_dq/environment/scripts/", file_name), "/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data")
+file.rename(from = paste0("/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data/", file_name), 
+            to = "/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data/DQ_individual.xlsx")
+
+############################################## PS- PASS ############################################## 
+## Salvo la lista dei pazienti che hanno passato i check in un csv (elimino tutti i pazienti che hanno almeno un check FAIL)
+ps_pass <- subset(ps_ctrl, !(a01_id %in% check_failed$a01_id))
+
+file_name <- paste0(properties$id_centro,'-',id_analysis,'-pset-pass-', format(Sys.Date(), "%y%m%d"), '.csv')
+write.csv(ps_pass, file_name, row.names = FALSE, na = "")
+
+# Copy in /data
+file.copy(from = paste0("/opt/redcap_dq/environment/scripts/", file_name), "/opt/redcap_dq/environment/data")
+
+############################################## QC REPORT SUMMARY ##############################################
+# creo data frame per conteggio missing e missing+unknown
+check_summary <- data.frame("var" = character(0), "den" = integer(0), "perc_miss" = double(0), "perc_miss_unk" = double(0))
+
+## Variabili non descrittive, non autocalcolate o che non siano checkbox
+metadata_tmp <- subset(metadata,!(field_type %in% c("descriptive","calc", "checkbox")))
+metadata_tmp <- metadata_tmp[-c(1,grep("unk", metadata_tmp$field_name)),] # tolgo anche a01_id e tutte quelle del tipo *_dayunk
+######## TOLGO d04_diagage_man ##########
+metadata_tmp <- subset(metadata_tmp,!(field_name %in% c("d04_diagage_man")))
+###################### DA TOGLIERE QUANDO SISTEMANO LA BRANCHING LOGIC #############################
+metadata_tmp <- subset(metadata_tmp,!(field_name %in% c("f05_1_surgeryprocsite_4","f05_1_surgeryprocsite_5")))
+####################################################################################################
+
+for (i in 1:nrow(metadata_tmp)){
+  var_tmp = metadata_tmp$field_name[i]
+  form_complete = paste0(metadata_tmp$form_name[i], '_complete')
+  expr_str = renderLogic(metadata_tmp$branching_logic[i])
+  if(is.na(expr_str))
+    ps_tmp <- subset(data, get(form_complete) == 2)
+  else 
+    ps_tmp <- subset(data, get(form_complete) == 2 & eval(parse(text = expr_str)))
+  
+  if(nrow(ps_tmp) != 0){
+    check_summary <- getMissUnk(ps_tmp, var_tmp, check_summary)
+  }
+}
+
+## Variabili con checkbox
+metadata_tmp <- subset(metadata, field_type %in% c("checkbox"))
+
+for (i in 1:nrow(metadata_tmp)){
+  var_patt = metadata_tmp$field_name[i]
+  form_complete = paste0(metadata_tmp$form_name[i], '_complete')
+  expr_str = renderLogic(metadata_tmp$branching_logic[i])
+  if(is.na(expr_str))
+    ps_tmp <- subset(data, get(form_complete) == 2)
+  else 
+    ps_tmp <- subset(data, get(form_complete) == 2 & eval(parse(text = expr_str)))
+  
+  if(nrow(ps_tmp) != 0){
+    check_summary <- getMissUnkCheckbox(ps_tmp, var_patt, check_summary)
+    
+  }
+}
+
+# Metto in ordine alfabetico e cambio nomi alle colonne per report
+check_summary <- plyr::arrange(check_summary, var) %>%
+  mutate(perc_miss = formattable::percent(perc_miss)) %>%
+  mutate(perc_miss_unk = formattable::percent(perc_miss_unk))
+colnames(check_summary) <- c("Variable", "Denominator","% missing", "% missing + unknown")
+
+# write summary report
+file_name <- paste0(properties$id_centro,'-',id_analysis,'-QC-summary-', format(Sys.Date(), "%y%m%d"), '.xlsx')
+
+# create workbook
+wb <- createWorkbook()
+
+# add worksheet
+addWorksheet(wb, "Missing & Unknown")
+
+# write data on worksheet
+writeData(wb,sheet = "Missing & Unknown", check_summary, borders = "all", borderColour = "#999999",
+          headerStyle = createStyle(border = c("top", "bottom", "left", "right"), borderColour = "#999999", textDecoration = "bold"))                             
+setColWidths(wb,sheet = "Missing & Unknown",cols = 1:ncol(check_summary),widths = "auto")
+
+
+# save to xlsx
+saveWorkbook(wb, file_name, overwrite = TRUE)
+
+# Copy in /data
+file.copy(from = paste0("/opt/redcap_dq/environment/scripts/", file_name), "/opt/redcap_dq/environment/data")
+
+# Copy in /vantage6-starter_head_and_neck-user-vol/_data
+file.copy(from = paste0("/opt/redcap_dq/environment/scripts/", file_name), "/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data")
+file.rename(from = paste0("/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data/", file_name), 
+            to = "/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data/DQ_summary.xlsx")
