@@ -1,10 +1,10 @@
 ##### Data Quality HN Core Data Registry 2.0 #####
 
 # analysis id --------- CHANGE THE ANALYSIS ID HERE
-id_analysis <- "TEST"
+id_analysis <- "TEST2"
 
 # run id ------ CHANGE THE RUN ID HERE
-run_id <- paste0("TEST", format(Sys.Date(), "%y%m%d"),"_1")
+run_id <- paste0("TEST2", format(Sys.Date(), "%y%m%d"),"_1")
 
 # id_centro AIOCC
 id_aiocc <- 49
@@ -201,7 +201,8 @@ if(!nrow(pts_id)) {
   if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then
       docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data/", run_id, "-QC-individual.xlsx
   fi;
-  cp $datafile /data' | bash"))
+  #Comment matteo 240925
+  #cp $datafile /data' | bash"))
   
   ##### QC SUMMARY 
   wb <- createWorkbook()
@@ -216,7 +217,8 @@ if(!nrow(pts_id)) {
   if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then
       docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data/", run_id, "-QC-summary.xlsx
   fi;
-  cp $datafile /data' | bash"))
+  #Comment matteo 240925
+  #cp $datafile /data' | bash"))
   
   message("No records exist yet. Execution stopped.")
   opt <- options(show.error.messages=FALSE)
@@ -395,7 +397,8 @@ system(paste0("echo \'datafile=\"/opt/redcap_dq/environment/data/", file_name,"\
 if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then
       docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data/", run_id, "-QC-individual.xlsx
 fi;
-cp $datafile /data' | bash"))
+#Commented by matteo 240925
+#cp $datafile /data' | bash"))
 
 ############################################## QC REPORT SUMMARY ##############################################
 # Missing and unknown ---------
@@ -556,4 +559,5 @@ system(paste0("echo \'datafile=\"/opt/redcap_dq/environment/data/", file_name,"\
 if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then
       docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data/", run_id, "-QC-summary.xlsx
 fi;
-cp $datafile /data' | bash"))
+#Commented by matteo 240925
+#cp $datafile /data' | bash"))
