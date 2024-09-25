@@ -3,7 +3,7 @@ LOCK_FILE="/tmp/VANTAGE_PROCESS_LOCK_FILE"
 general_log="/opt/redcap_dq/environment/logs/log.txt"
 
 if ! [ -f "$LOCK_FILE" ]; then
-	URL="https://biomeris-int-vantage-test.s3-eu-west-1.amazonaws.com/exec_1.R"
+	URL="https://raw.githubusercontent.com/biomeris/headandneck-dataquality/main/exec_1.R"
 	script_wd="/opt/redcap_dq/environment/scripts/"
 	logs="/opt/redcap_dq/environment/logs/"
 
