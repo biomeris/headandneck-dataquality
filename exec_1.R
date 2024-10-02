@@ -1,10 +1,10 @@
 ##### Data Quality HN Core Data Registry 2.0 #####
 
 # analysis id --------- CHANGE THE ANALYSIS ID HERE
-id_analysis <- "TEST2"
+id_analysis <- "TEST3"
 
 # run id ------ CHANGE THE RUN ID HERE
-run_id <- paste0("TEST2", format(Sys.Date(), "%y%m%d"),"_1")
+run_id <- paste0("TEST3", format(Sys.Date(), "%y%m%d"),"_1")
 
 # id_centro AIOCC
 id_aiocc <- 49
