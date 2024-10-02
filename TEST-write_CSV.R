@@ -592,8 +592,10 @@ if (nrow(ps_pass)) {
        chmod 766 $VTG_DATA_DIR/data_version.json")
 
   # Copy in /vantage6-starter_head_and_neck-user-vol/_data
-  system("echo \'datafile=\"/data/default.csv\"; if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data; fi' | bash")
-  system("echo \'datafile=\"/data/data_version.json\"; if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data; fi' | bash")
+  # system("echo \'datafile=\"/data/default.csv\"; if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data; fi' | bash")
+  # system("echo \'datafile=\"/data/data_version.json\"; if [[ \"$( docker ps -q -f name=vantage6-starter_head_and_neck-user)\" && \"$( docker container inspect -f '{{.State.Status}}' vantage6-starter_head_and_neck-user )\" == \"running\" ]]; then docker cp $datafile vantage6-starter_head_and_neck-user:/mnt/data; fi' | bash")
+  file.copy(from = "/data/default.csv", to = "/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data", overwrite = TRUE)
+  file.copy(from = "/data/data_version.json", to = "/var/lib/docker/volumes/vantage6-starter_head_and_neck-user-vol/_data", overwrite = TRUE)
 } else {
   # write txt
   file_name <- paste0(properties$id_centro,'-', run_id,'-DATA-report-', format(Sys.Date(), "%y%m%d"), '.txt')
